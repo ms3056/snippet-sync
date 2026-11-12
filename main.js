@@ -216,7 +216,7 @@ class SnippetSyncPlugin extends Plugin {
       const ref = this.currentRef();
       const manifest = await this.fetchManifestRaw(ref);
       const base = rawBase(this.settings.repo, this.settings.folder, ref);
-      const summary = { version: manifest.version, ref, name: manifest.name, added: 0, updated: 0, removed: 0, conflicts: 0, unchanged: 0 };
+      const summary = { version: manifest.version, ref, name: manifest.name, added: 0, updated: 0, removed: 0, conflicts: 0, unchanged: 0, updatedIds: [], removedIds: [] };
       const toSave = { ...this.settings.snippets };
 
       // Consider every manifest snippet; only SELECTED ones are fetched/written.
@@ -245,13 +245,19 @@ class SnippetSyncPlugin extends Plugin {
 
         if (remoteSum !== state.checksum || localSum === null) {
           summary.updated++;
+          summary.updatedIds.push(id);
           if (applyUpdates) {
             await this.writeLocal(target, remote);
             state.checksum = remoteSum;
             state.conflict = false;
+            state.needsUpdate = false;
             if (this.settings.enableAfterInstall) await this.setEnabledState(target, true);
+          } else {
+            // Record that THIS snippet is behind so the settings list can show it.
+            state.needsUpdate = true;
           }
         } else {
+          state.needsUpdate = false;
           summary.unchanged++;
         }
         toSave[id] = state;
@@ -261,6 +267,7 @@ class SnippetSyncPlugin extends Plugin {
       for (const id of Object.keys(toSave)) {
         if (toSave[id].selected && !this.manifestEntry(manifest, id)) {
           summary.removed++;
+          summary.removedIds.push(id);
           if (applyUpdates) {
             const target = toSave[id].file;
             const local = await this.readLocal(target);
@@ -275,14 +282,15 @@ class SnippetSyncPlugin extends Plugin {
 
       this.settings.snippets = toSave;
       this.settings.lastCheck = Date.now();
-      this.settings.lastResult = `${manifest.name || this.settings.repo} ${manifest.version} (@${ref}) — ${summary.updated} update(s), ${summary.removed} removed, ${summary.conflicts} conflict(s)`;
+      this.settings.lastResult = `${manifest.name || this.settings.repo} ${manifest.version} (@${ref}) — ${summary.updated} update(s)${summary.updatedIds.length ? `: ${summary.updatedIds.join(", ")}` : ""}, ${summary.removed} removed, ${summary.conflicts} conflict(s)`;
       await this.saveSettings();
 
       if (this.settingsTab) this.settingsTab.refreshSnippetSection();
 
       const n = summary.updated + summary.removed;
       if (n > 0) {
-        new Notice(`Snippet Sync\n${n} snippet(s) ${applyUpdates ? "updated" : "need updating"} (${summary.conflicts} conflicted)`);
+        const names = [...summary.updatedIds, ...summary.removedIds].join(", ");
+        new Notice(`Snippet Sync\n${n} snippet(s) ${applyUpdates ? "updated" : "need updating"}: ${names}${summary.conflicts ? ` (${summary.conflicts} conflicted)` : ""}`);
       }
       return summary;
     } catch (e) {
@@ -318,9 +326,11 @@ class SnippetSyncPlugin extends Plugin {
       state.selected = true;
       state.checksum = remoteSum;
       state.conflict = false;
+      state.needsUpdate = false;
       if (this.settings.enableAfterInstall) await this.setEnabledState(target, true);
     } else {
       state.selected = false;
+      state.needsUpdate = false;
       // Only delete a file we own (matches what we installed); keep user edits.
       const local = await this.readLocal(target);
       if (local !== null && checksum(local) === state.checksum) {
@@ -527,8 +537,13 @@ class SnippetSyncSettingTab extends PluginSettingTab {
 
       // Status badge text.
       const badge = row.settingEl.createSpan({ cls: "ss-badge" });
-      if (state.conflict) badge.setText("conflict");
-      else if (state.selected) badge.setText("installed");
+      if (state.conflict) {
+        badge.setText("conflict");
+        badge.addClass("ss-badge-conflict");
+      } else if (state.needsUpdate) {
+        badge.setText("update available");
+        badge.addClass("ss-badge-update");
+      } else if (state.selected) badge.setText("installed");
       else badge.setText("available");
     }
   }

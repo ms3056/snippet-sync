@@ -13,6 +13,16 @@ span.ss-badge:empty {
   display: none;
 }
 
+span.ss-badge-update {
+  background: color-mix(in srgb, var(--color-yellow) 25%, transparent);
+  color: var(--color-yellow);
+}
+
+span.ss-badge-conflict {
+  background: color-mix(in srgb, var(--color-red) 25%, transparent);
+  color: var(--color-red);
+}
+
 .ss-source-line {
   font-size: 0.9em;
   color: var(--text-muted);
