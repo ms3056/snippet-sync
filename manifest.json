@@ -2,7 +2,7 @@
   "id": "snippet-sync",
   "name": "Snippet Sync",
   "description": "Install and auto-update CSS snippets from a GitHub repository whose manifest.json sits at the repo root.",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "author": "HiroMike",
   "authorUrl": "https://github.com/ms3056",
   "isDesktopOnly": false,

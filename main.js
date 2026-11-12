@@ -5,9 +5,16 @@
  *
  * Install and auto-update CSS snippets from a GitHub repository.
  * Modeled on BRAT's theme mechanic: the repo is the source of truth,
- * files are fetched from raw.githubusercontent.com/HEAD (no API, no rate
- * limits), and updates are detected by checksum. The repo must contain
- * a manifest.json at the source folder root listing every snippet.
+ * files are fetched from raw.githubusercontent.com (no API, no rate
+ * limits for content), and updates are detected by checksum. The repo
+ * must contain a manifest.json at the source folder root listing every
+ * snippet.
+ *
+ * A version selector sits above the snippet list:
+ *   - "latest"      = watch the repo's default branch (HEAD) and auto-update.
+ *   - a named tag   = pin to that exact version (its manifest + files); the
+ *                     list shows that version, and updates re-fetch that tag.
+ * Tag names come from the GitHub tags API (one call per settings open).
  *
  * Installed snippets are written to the vault's native snippets folder and
  * enabled through the same customCss API Obsidian's Appearance tab uses, so
@@ -20,6 +27,7 @@ const { Plugin, PluginSettingTab, Setting, Notice, requestUrl, normalizePath } =
 const DEFAULT_SETTINGS = {
   repo: "ms3056/obsidian-snippets", // owner/name; full URLs are scrubbed on load
   folder: "",                       // optional subfolder inside the repo where snippets live
+  version: "latest",                // "latest" = HEAD / auto-update; else a tag name (pinned)
   checkAtStartup: true,             // BRAT's updateAtStartup equivalent
   intervalMinutes: 60,              // periodic check; 0 = off (BRAT lacks this, user asked for it)
   autoUpdate: true,                 // true = apply updates when found; false = notify only
@@ -45,10 +53,10 @@ function scrubRepo(raw) {
   return s;
 }
 
-/** Raw base URL for a source folder in a repo. folder="" = repo root. */
-function rawBase(repo, folder) {
+/** Raw base URL for a source folder in a repo. folder="" = repo root. ref = "HEAD" or a tag. */
+function rawBase(repo, folder, ref = "HEAD") {
   const f = (folder || "").replace(/^\/+|\/+$/g, "");
-  return `https://raw.githubusercontent.com/${scrubRepo(repo)}/HEAD/${f ? f + "/" : ""}`;
+  return `https://raw.githubusercontent.com/${scrubRepo(repo)}/${ref}/${f ? f + "/" : ""}`;
 }
 
 class SnippetSyncPlugin extends Plugin {
@@ -81,11 +89,11 @@ class SnippetSyncPlugin extends Plugin {
 
     // Startup check (BRAT waits 60s; re-use that window) + periodic interval.
     if (this.settings.checkAtStartup) {
-      window.setTimeout(() => void this.checkForUpdates(false), 60000);
+      window.setTimeout(() => void this.checkForUpdates(this.settings.version === "latest" && this.settings.autoUpdate), 60000);
     }
     if (this.settings.intervalMinutes > 0) {
       this.timer = window.setInterval(
-        () => void this.checkForUpdates(this.settings.autoUpdate),
+        () => void this.checkForUpdates(this.settings.version === "latest" && this.settings.autoUpdate),
         this.settings.intervalMinutes * 60 * 1000,
       );
     }
@@ -97,6 +105,11 @@ class SnippetSyncPlugin extends Plugin {
 
   async saveSettings() {
     await this.saveData(this.settings);
+  }
+
+  /** The git ref we read from: HEAD when "latest", otherwise the pinned tag. */
+  currentRef() {
+    return this.settings.version === "latest" || !this.settings.version ? "HEAD" : this.settings.version;
   }
 
   // ---- file plumbing (adapter on config dir, exactly like BRAT does for plugins) ----
@@ -158,12 +171,31 @@ class SnippetSyncPlugin extends Plugin {
     return res.text;
   }
 
-  async fetchManifestRaw() {
-    const base = rawBase(this.settings.repo, this.settings.folder);
+  async fetchManifestRaw(ref = this.currentRef()) {
+    const base = rawBase(this.settings.repo, this.settings.folder, ref);
     const text = await this.fetchText(`${base}manifest.json`);
     const m = JSON.parse(text);
     if (!Array.isArray(m.snippets)) throw new Error("manifest.json has no snippets array");
-    return { name: m.name || this.settings.repo, version: m.version || "0.0.0", snippets: m.snippets };
+    return { name: m.name || this.settings.repo, version: m.version || "0.0.0", ref, snippets: m.snippets };
+  }
+
+  /**
+   * Available versions for the selector: the tags on the repo's default branch,
+   * prefixed by semantic latest. One GitHub API call; failures degrade to ["latest"].
+   */
+  async fetchVersions() {
+    try {
+      const res = await requestUrl({
+        url: `https://api.github.com/repos/${scrubRepo(this.settings.repo)}/tags?per_page=50`,
+        method: "GET",
+        headers: { "User-Agent": "Obsidian/Snippet-Sync", Accept: "application/vnd.github.v3+json" },
+      });
+      if (res.status !== 200) return ["latest"];
+      const tags = (res.json || []).map((t) => t.name).filter((n) => n && n !== "latest");
+      return ["latest", ...tags];
+    } catch (e) {
+      return ["latest"];
+    }
   }
 
   /** Returns manifest entry for a snippet id or null. */
@@ -174,22 +206,24 @@ class SnippetSyncPlugin extends Plugin {
   // ---- core check ----
 
   /**
-   * Fetch the manifest, compare against installed/selected state, optionally apply updates.
-   * Returns a JSON summary for the settings UI / notice.
+   * Fetch the manifest for the active version, compare against installed/selected
+   * state, optionally apply updates (only meaningful on "latest"; pinned tags
+   * re-fetch that tag's content). Returns a JSON summary for the UI / notice.
    */
   async checkForUpdates(applyUpdates) {
     try {
       if (!this.settings.repo) return null;
-      const manifest = await this.fetchManifestRaw();
-      const base = rawBase(this.settings.repo, this.settings.folder);
-      const summary = { version: manifest.version, name: manifest.name, added: 0, updated: 0, removed: 0, conflicts: 0, unchanged: 0 };
+      const ref = this.currentRef();
+      const manifest = await this.fetchManifestRaw(ref);
+      const base = rawBase(this.settings.repo, this.settings.folder, ref);
+      const summary = { version: manifest.version, ref, name: manifest.name, added: 0, updated: 0, removed: 0, conflicts: 0, unchanged: 0 };
       const toSave = { ...this.settings.snippets };
 
       // Consider every manifest snippet; only SELECTED ones are fetched/written.
       for (const entry of manifest.snippets) {
         const id = String(entry.id);
         const target = String(entry.file || "").replace(/\.css$/i, "");
-        const state = toSave[id] || { id, file: target, selected: false, checksum: "" };
+        const state = toSave[id] || { id, file: target, selected: false, checksum: "", conflict: false };
 
         if (!state.selected) {
           // Listed for the settings checklist, but never fetched or written.
@@ -241,7 +275,7 @@ class SnippetSyncPlugin extends Plugin {
 
       this.settings.snippets = toSave;
       this.settings.lastCheck = Date.now();
-      this.settings.lastResult = `${manifest.name || this.settings.repo} ${manifest.version} — ${summary.updated} update(s), ${summary.removed} removed, ${summary.conflicts} conflict(s)`;
+      this.settings.lastResult = `${manifest.name || this.settings.repo} ${manifest.version} (@${ref}) — ${summary.updated} update(s), ${summary.removed} removed, ${summary.conflicts} conflict(s)`;
       await this.saveSettings();
 
       if (this.settingsTab) this.settingsTab.refreshSnippetSection();
@@ -263,12 +297,13 @@ class SnippetSyncPlugin extends Plugin {
   }
 
   async selectSnippet(id, selected) {
-    const manifest = await this.fetchManifestRaw();
+    const ref = this.currentRef();
+    const manifest = await this.fetchManifestRaw(ref);
     const entry = this.manifestEntry(manifest, id);
     if (!entry) return;
-    const base = rawBase(this.settings.repo, this.settings.folder);
+    const base = rawBase(this.settings.repo, this.settings.folder, ref);
     const target = String(entry.file).replace(/\.css$/i, "");
-    const state = this.settings.snippets[id] || { id, file: target, selected: false, checksum: "" };
+    const state = this.settings.snippets[id] || { id, file: target, selected: false, checksum: "", conflict: false };
 
     if (selected) {
       const remote = await this.fetchText(`${base}${entry.file}`);
@@ -338,6 +373,25 @@ class SnippetSyncSettingTab extends PluginSettingTab {
         }),
       );
 
+    // ---- Version selector (before the snippet list) ----
+    this.versionSetting = new Setting(containerEl)
+      .setName("Version")
+      .setDesc("latest = follow the repository and auto-update. A named tag = pin to that exact version.");
+
+    this.versionDropdown = this.versionSetting.addDropdown((d) => {
+      d.addOption("latest", "latest (auto-update)");
+      d.setValue(this.plugin.settings.version && this.plugin.settings.version !== "latest" ? this.plugin.settings.version : "latest");
+      d.onChange(async (v) => {
+        this.plugin.settings.version = v;
+        await this.plugin.saveSettings();
+        // Applying the selection: on "latest" just re-check; on a tag, pull that tag's files.
+        await this.plugin.checkForUpdates(v === "latest" ? this.plugin.settings.autoUpdate : true);
+        this.refresh();
+      });
+    });
+    // Fill remaining options (tags) asynchronously.
+    void this.populateVersions();
+
     // ---- Update behavior (BRAT-flavored) ----
     new Setting(containerEl)
       .setName("Check for updates at startup")
@@ -346,7 +400,6 @@ class SnippetSyncSettingTab extends PluginSettingTab {
         t.setValue(this.plugin.settings.checkAtStartup).onChange(async (v) => {
           this.plugin.settings.checkAtStartup = v;
           await this.plugin.saveSettings();
-          this.refresh();
         }),
       );
 
@@ -372,7 +425,7 @@ class SnippetSyncSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Auto-update when found")
-      .setDesc("Apply updates automatically. Off = notify you and let you apply via command/button.")
+      .setDesc("Apply updates automatically. Off = notify you and let you apply via command/button. (Applies to the 'latest' version.)")
       .addToggle((t) =>
         t.setValue(this.plugin.settings.autoUpdate).onChange(async (v) => {
           this.plugin.settings.autoUpdate = v;
@@ -408,10 +461,9 @@ class SnippetSyncSettingTab extends PluginSettingTab {
       }),
     );
 
-    // ---- Per-snippet checklist ----
+    // ---- Per-snippet checklist (single list — one render call) ----
     this.snippetSectionEl = containerEl.createDiv();
     this.refreshSnippetSection();
-    void this.refreshSnippetList();
   }
 
   refresh() {
@@ -419,7 +471,19 @@ class SnippetSyncSettingTab extends PluginSettingTab {
   }
 
   refreshSnippetSection() {
-    if (this.snippetSectionEl) this.refreshSnippetList();
+    if (this.snippetSectionEl) void this.refreshSnippetList();
+  }
+
+  async populateVersions() {
+    try {
+      const versions = await this.plugin.fetchVersions();
+      const dropdown = this.versionDropdown;
+      if (!dropdown) return;
+      for (const v of versions.slice(1)) dropdown.addOption(v, v);
+      dropdown.setValue(this.plugin.settings.version && this.plugin.settings.version !== "latest" ? this.plugin.settings.version : "latest");
+    } catch (e) {
+      /* leave just "latest" */
+    }
   }
 
   async refreshSnippetList() {
@@ -441,14 +505,17 @@ class SnippetSyncSettingTab extends PluginSettingTab {
       return;
     }
 
-    if (manifest && manifest.version) {
-      el.createEl("p", { cls: "ss-source-line", text: `Source: ${manifest.name || this.plugin.settings.repo} · version ${manifest.version}${this.plugin.settings.folder ? ` · folder: ${this.plugin.settings.folder}` : ""}` });
+    if (manifest) {
+      el.createEl("p", {
+        cls: "ss-source-line",
+        text: `Source: ${manifest.name || this.plugin.settings.repo} · version ${manifest.version} · @${manifest.ref}${this.plugin.settings.folder ? ` · folder: ${this.plugin.settings.folder}` : ""}`,
+      });
     }
 
     for (const entry of manifest.snippets) {
       const id = String(entry.id);
       const target = String(entry.file || "").replace(/\.css$/i, "");
-      const state = this.plugin.settings.snippets[id] || { id, file: target, selected: false, checksum: "" };
+      const state = this.plugin.settings.snippets[id] || { id, file: target, selected: false, checksum: "", conflict: false };
       const row = new Setting(el).setName(id).setDesc(entry.description || entry.file || "");
 
       row.addToggle((t) =>
