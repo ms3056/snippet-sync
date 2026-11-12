@@ -535,6 +535,18 @@ class SnippetSyncSettingTab extends PluginSettingTab {
         }),
       );
 
+      // Per-snippet update button — only when there is something to apply.
+      if (state.selected && state.needsUpdate && !state.conflict) {
+        row.addExtraButton((b) =>
+          b
+            .setIcon("lucide-download")
+            .setTooltip(`Update ${id}`)
+            .onClick(async () => {
+              await this.plugin.selectSnippet(id, true);
+            }),
+        );
+      }
+
       // Status badge text.
       const badge = row.settingEl.createSpan({ cls: "ss-badge" });
       if (state.conflict) {
