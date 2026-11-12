@@ -10,11 +10,11 @@
  * must contain a manifest.json at the source folder root listing every
  * snippet.
  *
- * A version selector sits above the snippet list:
- *   - "latest"      = watch the repo's default branch (HEAD) and auto-update.
- *   - a named tag   = pin to that exact version (its manifest + files); the
- *                     list shows that version, and updates re-fetch that tag.
- * Tag names come from the GitHub tags API (one call per settings open).
+ * The plugin always follows the repository's default branch (HEAD).
+ * Version pinning was tried and removed in v1.0.5: the user controls
+ * granularity with per-snippet checkboxes and single-snippet update
+ * buttons instead. Every check compares checksums; changed installed
+ * snippets are flagged "update available" (or applied, per settings).
  *
  * Installed snippets are written to the vault's native snippets folder and
  * enabled through the same customCss API Obsidian's Appearance tab uses, so
@@ -27,7 +27,7 @@ const { Plugin, PluginSettingTab, Setting, Notice, requestUrl, normalizePath } =
 const DEFAULT_SETTINGS = {
   repo: "",                         // owner/name of the snippets repository; user supplies it
   folder: "",                       // optional subfolder inside the repo where snippets live
-  version: "latest",                // "latest" = HEAD / auto-update; else a tag name (pinned)
+  version: "latest",                // kept for compat with older data.json; unused now (always HEAD)
   checkAtStartup: true,             // BRAT's updateAtStartup equivalent
   intervalMinutes: 60,              // periodic check; 0 = off (BRAT lacks this, user asked for it)
   autoUpdate: true,                 // true = apply updates when found; false = notify only
@@ -89,11 +89,11 @@ class SnippetSyncPlugin extends Plugin {
 
     // Startup check (BRAT waits 60s; re-use that window) + periodic interval.
     if (this.settings.checkAtStartup) {
-      window.setTimeout(() => void this.checkForUpdates(this.settings.version === "latest" && this.settings.autoUpdate), 60000);
+      window.setTimeout(() => void this.checkForUpdates(this.settings.autoUpdate), 60000);
     }
     if (this.settings.intervalMinutes > 0) {
       this.timer = window.setInterval(
-        () => void this.checkForUpdates(this.settings.version === "latest" && this.settings.autoUpdate),
+        () => void this.checkForUpdates(this.settings.autoUpdate),
         this.settings.intervalMinutes * 60 * 1000,
       );
     }
@@ -107,9 +107,13 @@ class SnippetSyncPlugin extends Plugin {
     await this.saveData(this.settings);
   }
 
-  /** The git ref we read from: HEAD when "latest", otherwise the pinned tag. */
+  /**
+   * The git ref we read from. Always HEAD: the version pinning selector was
+   * removed in v1.0.5 — the plugin follows the repo (latest) and selective
+   * per-snippet updates provide the granularity. The method stays for callers.
+   */
   currentRef() {
-    return this.settings.version === "latest" || !this.settings.version ? "HEAD" : this.settings.version;
+    return "HEAD";
   }
 
   // ---- file plumbing (adapter on config dir, exactly like BRAT does for plugins) ----
@@ -180,25 +184,8 @@ class SnippetSyncPlugin extends Plugin {
   }
 
   /**
-   * Available versions for the selector: the tags on the repo's default branch,
-   * prefixed by semantic latest. One GitHub API call; failures degrade to ["latest"].
+   * Returns manifest entry for a snippet id or null.
    */
-  async fetchVersions() {
-    try {
-      const res = await requestUrl({
-        url: `https://api.github.com/repos/${scrubRepo(this.settings.repo)}/tags?per_page=50`,
-        method: "GET",
-        headers: { "User-Agent": "Obsidian/Snippet-Sync", Accept: "application/vnd.github.v3+json" },
-      });
-      if (res.status !== 200) return ["latest"];
-      const tags = (res.json || []).map((t) => t.name).filter((n) => n && n !== "latest");
-      return ["latest", ...tags];
-    } catch (e) {
-      return ["latest"];
-    }
-  }
-
-  /** Returns manifest entry for a snippet id or null. */
   manifestEntry(manifest, id) {
     return manifest.snippets.find((s) => String(s.id) === id) || null;
   }
@@ -383,25 +370,6 @@ class SnippetSyncSettingTab extends PluginSettingTab {
         }),
       );
 
-    // ---- Version selector (before the snippet list) ----
-    this.versionSetting = new Setting(containerEl)
-      .setName("Version")
-      .setDesc("latest = follow the repository and auto-update. A named tag = pin to that exact version.");
-
-    this.versionDropdown = this.versionSetting.addDropdown((d) => {
-      d.addOption("latest", "latest (auto-update)");
-      d.setValue(this.plugin.settings.version && this.plugin.settings.version !== "latest" ? this.plugin.settings.version : "latest");
-      d.onChange(async (v) => {
-        this.plugin.settings.version = v;
-        await this.plugin.saveSettings();
-        // Applying the selection: on "latest" just re-check; on a tag, pull that tag's files.
-        await this.plugin.checkForUpdates(v === "latest" ? this.plugin.settings.autoUpdate : true);
-        this.refresh();
-      });
-    });
-    // Fill remaining options (tags) asynchronously.
-    void this.populateVersions();
-
     // ---- Update behavior (BRAT-flavored) ----
     new Setting(containerEl)
       .setName("Check for updates at startup")
@@ -435,7 +403,7 @@ class SnippetSyncSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Auto-update when found")
-      .setDesc("Apply updates automatically. Off = notify you and let you apply via command/button. (Applies to the 'latest' version.)")
+      .setDesc("Apply updates automatically. Off = notify you and let you apply via command/button or the per-snippet Update button.")
       .addToggle((t) =>
         t.setValue(this.plugin.settings.autoUpdate).onChange(async (v) => {
           this.plugin.settings.autoUpdate = v;
@@ -482,19 +450,6 @@ class SnippetSyncSettingTab extends PluginSettingTab {
 
   refreshSnippetSection() {
     if (this.snippetSectionEl) void this.refreshSnippetList();
-  }
-
-  async populateVersions() {
-    try {
-      if (!this.plugin.settings.repo) return; // no repo -> nothing to enumerate
-      const versions = await this.plugin.fetchVersions();
-      const dropdown = this.versionDropdown;
-      if (!dropdown) return;
-      for (const v of versions.slice(1)) dropdown.addOption(v, v);
-      dropdown.setValue(this.plugin.settings.version && this.plugin.settings.version !== "latest" ? this.plugin.settings.version : "latest");
-    } catch (e) {
-      /* leave just "latest" */
-    }
   }
 
   async refreshSnippetList() {
