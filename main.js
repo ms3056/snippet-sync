@@ -22,7 +22,7 @@
  * never fight the built-in toggle.
  */
 
-const { Plugin, PluginSettingTab, Setting, Notice, requestUrl, normalizePath } = require("obsidian");
+const { Plugin, PluginSettingTab, Setting, Notice, requestUrl, normalizePath, SecretComponent } = require("obsidian");
 
 const DEFAULT_SETTINGS = {
   repo: "",                         // owner/name of the snippets repository; user supplies it
@@ -34,6 +34,7 @@ const DEFAULT_SETTINGS = {
   enableAfterInstall: true,         // enable the snippet in Appearance when installed
   lastCheck: 0,                     // epoch ms of last successful check
   lastResult: "",                   // last check summary line
+  tokenSecret: "",                  // NAME of the GitHub token in SecretStorage (never the value)
   snippets: {},                     // id -> { id, file, selected, checksum }
 };
 
@@ -116,6 +117,71 @@ class SnippetSyncPlugin extends Plugin {
     return "HEAD";
   }
 
+  // ---- GitHub token (stored ONLY in SecretStorage; data.json holds the name) ----
+
+  /** The secret name under which the user's GitHub token is kept in SecretStorage. */
+  tokenSecretName() {
+    return this.settings.tokenSecret || "snippet-sync-github-token";
+  }
+
+  /** True when the user has stored a token in SecretStorage (by name). */
+  hasToken() {
+    const ss = this.app && this.app.secretStorage;
+    if (!ss) return false;
+    try {
+      return ss.peekSecret(this.tokenSecretName()) !== null;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /**
+   * The token value, ONLY for use in outbound Authorization headers.
+   * Never logs it, never stores it in settings; callers must not echo it.
+   */
+  async getTokenValue() {
+    const ss = this.app && this.app.secretStorage;
+    if (!ss) return null;
+    try {
+      // peekSecret avoids bumping core's last-access bookkeeping on every check.
+      return (await ss.peekSecret(this.tokenSecretName())) || null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /** Save a pasted token into SecretStorage. settings.tokenSecret stays a NAME only. */
+  async saveToken(value) {
+    const ss = this.app && this.app.secretStorage;
+    if (!ss) {
+      new Notice("Snippet Sync\nSecretStorage is not available on this Obsidian build.");
+      return;
+    }
+    const name = this.tokenSecretName();
+    try {
+      await ss.setSecret(name, value);
+      this.settings.tokenSecret = name;
+      await this.saveSettings();
+      new Notice("Snippet Sync\nGitHub token stored securely in SecretStorage.");
+    } catch (e) {
+      new Notice(`Snippet Sync\nCould not store token: ${e.message}`);
+    }
+  }
+
+  /** Delete the stored token from SecretStorage and forget the name. */
+  async deleteToken() {
+    const ss = this.app && this.app.secretStorage;
+    if (!ss) return;
+    try {
+      await ss.deleteSecret(this.tokenSecretName());
+      this.settings.tokenSecret = "";
+      await this.saveSettings();
+      new Notice("Snippet Sync\nGitHub token removed from SecretStorage.");
+    } catch (e) {
+      new Notice(`Snippet Sync\nCould not remove token: ${e.message}`);
+    }
+  }
+
   // ---- file plumbing (adapter on config dir, exactly like BRAT does for plugins) ----
 
   snippetsFolder() {
@@ -170,7 +236,12 @@ class SnippetSyncPlugin extends Plugin {
   // ---- fetch layer ----
 
   async fetchText(url) {
-    const res = await requestUrl({ url, method: "GET", headers: { "User-Agent": "Obsidian/Snippet-Sync" } });
+    const headers = { "User-Agent": "Obsidian/Snippet-Sync" };
+    // If THIS user has stored their own token in SecretStorage, authenticate so
+    // GitHub counts these requests against their personal quota, not the shared one.
+    const token = await this.getTokenValue();
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+    const res = await requestUrl({ url, method: "GET", headers });
     if (res.status !== 200) throw new Error(`HTTP ${res.status} for ${url}`);
     return res.text;
   }
@@ -390,6 +461,73 @@ class SnippetSyncSettingTab extends PluginSettingTab {
         }),
       );
 
+    // ---- GitHub API token (optional, per-user, SecretStorage-backed) ----
+    new Setting(containerEl)
+      .setName("GitHub token (optional)")
+      .setDesc("Authenticates GitHub requests so they use YOUR personal rate limit (5,000/hr) instead of the shared anonymous one (60/hr). The token is stored ONLY in Obsidian's SecretStorage keychain — never in this plugin's data file, never published. Each user pastes their own token here on their own machine.")
+      .addButton((b) =>
+        b
+          .setButtonText("Create a token")
+          .setTooltip("Opens GitHub's token creation page")
+          .onClick(() => {
+            try {
+              window.open("https://github.com/settings/tokens/new?description=Snippet+Sync&scopes=", "_blank");
+            } catch (e) {
+              /* window.open may be blocked in some embedded contexts */
+            }
+          }),
+      )
+      .addButton((b) =>
+        b.setButtonText(this.plugin.hasToken() ? "Paste a new token" : "Paste your token").onClick(async () => {
+          // Focus the paste field below; the actual paste/save happens there.
+          if (this.tokenInput) this.tokenInput.inputEl.focus();
+        }),
+      );
+
+    new Setting(containerEl)
+      .setName("Token value")
+      .setDesc(this.plugin.hasToken() ? "Stored securely. Shows only the tail; use the eye to peek while editing, the trash to remove." : "Not set yet. Paste your GitHub personal access token here; it will be saved to the OS keychain via SecretStorage.")
+      .addText((t) => {
+        this.tokenInput = t;
+        t.inputEl.type = "password"; // native asterisks while typing
+        t.setPlaceholder("ghp_••••••••••••");
+        if (this.plugin.hasToken()) {
+          const tail = this.tokenTail();
+          t.setValue(`ghp_••••••••••••${tail ? tail : ""}`);
+        }
+        t.onChange(async (v) => {
+          if (!v) return;
+          if (v.startsWith("ghp_•••")) return; // cosmetic mask, not a real paste
+          await this.plugin.saveToken(v.trim());
+        });
+      })
+      .addExtraButton((b) =>
+        b
+          .setIcon(this.plugin.hasToken() ? "lucide-eye" : "lucide-eye-off")
+          .setTooltip(this.plugin.hasToken() ? "Token stored" : "No token stored")
+          .onClick(async () => {
+            if (!this.plugin.hasToken()) return;
+            // Reveal the real token so the user can verify/copy (their own machine).
+            const real = await this.plugin.getTokenValue();
+            if (real && this.tokenInput) {
+              this.tokenInput.setValue(real);
+              this.tokenInput.inputEl.type = "text";
+              window.setTimeout(() => {
+                if (this.tokenInput) this.tokenInput.inputEl.type = "password";
+              }, 15000);
+            }
+          }),
+      )
+      .addExtraButton((b) =>
+        b
+          .setIcon("lucide-trash-2")
+          .setTooltip("Remove stored token")
+          .onClick(async () => {
+            await this.plugin.deleteToken();
+            this.refresh();
+          }),
+      );
+
     // ---- Update behavior (BRAT-flavored) ----
     new Setting(containerEl)
       .setName("Check for updates at startup")
@@ -477,6 +615,23 @@ class SnippetSyncSettingTab extends PluginSettingTab {
   refreshStatus() {
     if (this.statusRow) {
       this.statusRow.setDesc(this.plugin.settings.lastResult || "No check yet.");
+    }
+  }
+
+  /**
+   * Last 4 chars of the stored token for the masked display.
+   * Returns "" when there is no token. Never returns more than the tail.
+   */
+  tokenTail() {
+    const ss = this.app && this.app.secretStorage;
+    if (!ss) return "";
+    try {
+      const v = ss.peekSecret(this.plugin.tokenSecretName());
+      if (!v) return "";
+      const s = String(v).trim();
+      return s.length > 4 ? s.slice(-4) : s;
+    } catch (e) {
+      return "";
     }
   }
 
