@@ -73,7 +73,7 @@ class SnippetSyncPlugin extends Plugin {
       name: "Snippet Sync: Check for snippet updates",
       checkCallback: (checking) => {
         if (checking) return true;
-        void this.checkForUpdates(false);
+        void this.checkForUpdates(false, true);
         return true;
       },
     });
@@ -82,7 +82,7 @@ class SnippetSyncPlugin extends Plugin {
       name: "Snippet Sync: Update all snippets",
       checkCallback: (checking) => {
         if (checking) return true;
-        void this.checkForUpdates(true);
+        void this.checkForUpdates(true, true);
         return true;
       },
     });
@@ -194,10 +194,11 @@ class SnippetSyncPlugin extends Plugin {
 
   /**
    * Fetch the manifest for the active version, compare against installed/selected
-   * state, optionally apply updates (only meaningful on "latest"; pinned tags
-   * re-fetch that tag's content). Returns a JSON summary for the UI / notice.
+   * state, optionally apply updates. Returns a JSON summary for the UI / notice.
+   * @param {boolean} applyUpdates - true = write changes; false = dry run (flag badges).
+   * @param {boolean} manual      - true = user pressed a button/command: ALWAYS toast.
    */
-  async checkForUpdates(applyUpdates) {
+  async checkForUpdates(applyUpdates, manual = false) {
     try {
       if (!this.settings.repo) return null;
       const ref = this.currentRef();
@@ -272,10 +273,26 @@ class SnippetSyncPlugin extends Plugin {
       this.settings.lastResult = `${manifest.name || this.settings.repo} ${manifest.version} (@${ref}) — ${summary.updated} update(s)${summary.updatedIds.length ? `: ${summary.updatedIds.join(", ")}` : ""}, ${summary.removed} removed, ${summary.conflicts} conflict(s)`;
       await this.saveSettings();
 
-      if (this.settingsTab) this.settingsTab.refreshSnippetSection();
+      if (this.settingsTab) {
+        this.settingsTab.refreshSnippetSection();
+        this.settingsTab.refreshStatus();
+      }
 
       const n = summary.updated + summary.removed;
-      if (n > 0) {
+      const selected = Object.keys(toSave).filter((id) => toSave[id].selected).length;
+      if (manual) {
+        // User asked for feedback — never stay silent, even when nothing to do.
+        if (n === 0) {
+          new Notice(
+            selected === 0
+              ? "Snippet Sync\nUp to date. No snippets are installed — enable them in Settings to start syncing."
+              : "Snippet Sync\nUp to date — nothing to update.",
+          );
+        } else {
+          const names = [...summary.updatedIds, ...summary.removedIds].join(", ");
+          new Notice(`Snippet Sync\n${n} snippet(s) ${applyUpdates ? "updated" : "need updating"}: ${names}${summary.conflicts ? ` (${summary.conflicts} conflicted)` : ""}`);
+        }
+      } else if (n > 0) {
         const names = [...summary.updatedIds, ...summary.removedIds].join(", ");
         new Notice(`Snippet Sync\n${n} snippet(s) ${applyUpdates ? "updated" : "need updating"}: ${names}${summary.conflicts ? ` (${summary.conflicts} conflicted)` : ""}`);
       }
@@ -285,7 +302,10 @@ class SnippetSyncPlugin extends Plugin {
       this.settings.lastCheck = Date.now();
       this.settings.lastResult = `Check failed: ${e.message}`;
       await this.saveSettings();
-      if (this.settingsTab) this.settingsTab.refreshSnippetSection();
+      if (this.settingsTab) {
+        this.settingsTab.refreshSnippetSection();
+        this.settingsTab.refreshStatus();
+      }
       new Notice(`Snippet Sync\nCheck failed: ${e.message}`);
       return null;
     }
@@ -424,17 +444,18 @@ class SnippetSyncSettingTab extends PluginSettingTab {
     // ---- Status + manual actions ----
     const statusRow = new Setting(containerEl).setName("Status");
     statusRow.setDesc(this.plugin.settings.lastResult || "No check yet.");
+    this.statusRow = statusRow;
     statusRow.addButton((b) =>
       b.setButtonText("Check now").onClick(async () => {
         b.setDisabled(true);
-        await this.plugin.checkForUpdates(false);
+        await this.plugin.checkForUpdates(false, true);
         b.setDisabled(false);
       }),
     );
     statusRow.addButton((b) =>
       b.setButtonText("Update all").setWarning().onClick(async () => {
         b.setDisabled(true);
-        await this.plugin.checkForUpdates(true);
+        await this.plugin.checkForUpdates(true, true);
         b.setDisabled(false);
       }),
     );
@@ -450,6 +471,13 @@ class SnippetSyncSettingTab extends PluginSettingTab {
 
   refreshSnippetSection() {
     if (this.snippetSectionEl) void this.refreshSnippetList();
+  }
+
+  /** Update the Status row text so a manual check always shows its result. */
+  refreshStatus() {
+    if (this.statusRow) {
+      this.statusRow.setDesc(this.plugin.settings.lastResult || "No check yet.");
+    }
   }
 
   async refreshSnippetList() {
