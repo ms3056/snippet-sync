@@ -1,0 +1,20 @@
+/* Snippet Sync — small UI touches for the settings tab */
+
+span.ss-badge {
+  font-size: 0.8em;
+  padding: 2px 8px;
+  border-radius: 10px;
+  margin-left: 8px;
+  background: var(--background-modifier-hover);
+  color: var(--text-muted);
+}
+
+span.ss-badge:empty {
+  display: none;
+}
+
+.ss-source-line {
+  font-size: 0.9em;
+  color: var(--text-muted);
+  margin: 4px 0 8px 0;
+}
