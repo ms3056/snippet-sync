@@ -25,7 +25,7 @@
 const { Plugin, PluginSettingTab, Setting, Notice, requestUrl, normalizePath } = require("obsidian");
 
 const DEFAULT_SETTINGS = {
-  repo: "ms3056/obsidian-snippets", // owner/name; full URLs are scrubbed on load
+  repo: "",                         // owner/name of the snippets repository; user supplies it
   folder: "",                       // optional subfolder inside the repo where snippets live
   version: "latest",                // "latest" = HEAD / auto-update; else a tag name (pinned)
   checkAtStartup: true,             // BRAT's updateAtStartup equivalent
@@ -476,6 +476,7 @@ class SnippetSyncSettingTab extends PluginSettingTab {
 
   async populateVersions() {
     try {
+      if (!this.plugin.settings.repo) return; // no repo -> nothing to enumerate
       const versions = await this.plugin.fetchVersions();
       const dropdown = this.versionDropdown;
       if (!dropdown) return;
