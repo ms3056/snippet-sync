@@ -488,9 +488,10 @@ class SnippetSyncSettingTab extends PluginSettingTab {
       );
 
     // ---- GitHub API token (one merged card: source info + value + validity) ----
-    // Both rows live in a `setting-items` group so Obsidian draws a SINGLE
-    // card around them (no separate cards, no gap) — they're one concept.
-    const tokenCard = containerEl.createDiv({ cls: "setting-items" });
+    // Both rows live inside a `.setting-group > .setting-items` container so
+    // Obsidian draws a SINGLE card around them — they're one concept.
+    const tokenGroup = containerEl.createDiv({ cls: "setting-group" });
+    const tokenCard = tokenGroup.createDiv({ cls: "setting-items ss-token-group" });
     new Setting(tokenCard)
       .setName("GitHub token (optional)")
       .setDesc("Authenticates GitHub requests so they use YOUR personal rate limit (5,000/hr) instead of the shared anonymous one (60/hr). The token is stored ONLY in Obsidian's SecretStorage keychain — never in this plugin's data file, never published. Each user pastes their own token here on their own machine.")

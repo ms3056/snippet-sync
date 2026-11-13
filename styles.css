@@ -29,33 +29,79 @@ span.ss-badge-conflict {
   margin: 4px 0 8px 0;
 }
 
-/* Token value card: one row split 40/60 — name + description wrap inside
-   the left 40%; input + eye + trash + Check fill the right 60% on the SAME
-   line, top-aligned with the title. Obsidian's default `.setting-item{gap}`
-   adds a 16px horizontal gap between the columns, and `flex-wrap` (needed so
-   the validity bar can drop to its own row) turns 40% + gap + 60% into a WRAP
-   — that's what kept pulling the control column below the text. Column gap is
-   zeroed (spacing comes from the info's padding-right instead); row gap stays
-   so the bottom bar has breathing room. */
+/* Merged GitHub token card: both rows live inside one card container */
+.ss-token-group {
+  background-color: var(--background-secondary);
+  border-radius: var(--radius-m, 8px);
+  overflow: hidden;
+  margin-bottom: var(--size-4-2, 8px);
+}
+
+.ss-token-group > .setting-item {
+  background: transparent !important;
+  border: none !important;
+  border-radius: 0 !important;
+  margin: 0 !important;
+  box-shadow: none !important;
+}
+
+.ss-token-group > .setting-item + .setting-item {
+  border-top: 1px solid var(--background-modifier-border) !important;
+}
+
+/* Token value row: 2-column grid (info on left, input + eye + trash + Check
+   aligned on the right as a second column, with the validity bar spanning
+   full width underneath). */
 .setting-item.ss-token-card {
-  flex-wrap: wrap;
-  align-items: flex-start;
-  column-gap: 0;
-  row-gap: var(--size-4-3);
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 16px;
+  row-gap: var(--size-4-3, 12px);
 }
 
 .setting-item.ss-token-card .setting-item-info {
-  flex: 0 0 40%;
+  grid-column: 1;
+  grid-row: 1;
+  margin-right: 0 !important;
   min-width: 0;
-  padding-right: 12px;
 }
 
 .setting-item.ss-token-card .setting-item-control {
-  flex: 0 1 60%;
-  min-width: 0;
+  grid-column: 2;
+  grid-row: 1;
   width: auto !important;
+  min-width: 0;
   justify-content: flex-end;
+  align-items: center;
   flex-wrap: nowrap;
+  gap: 6px;
+}
+
+.setting-item.ss-token-card .setting-item-control input {
+  width: 170px;
+  max-width: 100%;
+  min-width: 100px;
+}
+
+.setting-item.ss-token-card div.ss-token-status {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  margin: 0;
+}
+
+@media (max-width: 520px) {
+  .setting-item.ss-token-card {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .setting-item.ss-token-card .setting-item-control {
+    grid-column: 1;
+    grid-row: 2;
+    justify-content: flex-start;
+  }
+  .setting-item.ss-token-card div.ss-token-status {
+    grid-row: 3;
+  }
 }
 
 div.ss-token-status {
