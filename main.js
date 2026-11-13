@@ -487,8 +487,11 @@ class SnippetSyncSettingTab extends PluginSettingTab {
         }),
       );
 
-    // ---- GitHub API token (optional, per-user, SecretStorage-backed) ----
-    new Setting(containerEl)
+    // ---- GitHub API token (one merged card: source info + value + validity) ----
+    // Both rows live in a `setting-items` group so Obsidian draws a SINGLE
+    // card around them (no separate cards, no gap) — they're one concept.
+    const tokenCard = containerEl.createDiv({ cls: "setting-items" });
+    new Setting(tokenCard)
       .setName("GitHub token (optional)")
       .setDesc("Authenticates GitHub requests so they use YOUR personal rate limit (5,000/hr) instead of the shared anonymous one (60/hr). The token is stored ONLY in Obsidian's SecretStorage keychain — never in this plugin's data file, never published. Each user pastes their own token here on their own machine.")
       .addButton((b) =>
@@ -504,7 +507,7 @@ class SnippetSyncSettingTab extends PluginSettingTab {
           }),
       );
 
-    const tokenSetting = new Setting(containerEl)
+    const tokenSetting = new Setting(tokenCard)
       .setName("Token value")
       .setDesc(this.plugin.hasToken() ? "Stored securely. Shows only the tail; the eye reveals/hides the full value." : "Not set yet. Paste your GitHub personal access token here; it will be saved to the OS keychain via SecretStorage.")
       .addText((t) => {
