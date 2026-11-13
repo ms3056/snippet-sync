@@ -30,11 +30,14 @@ span.ss-badge-conflict {
 }
 
 /* Token value card: one row split 40/60 — name + description wrap inside
-   the left 40%; input + eye + trash + Check fill the right 60% on the same
-   line (min-width:0 lets the description actually wrap instead of stretching
-   the row); the validity bar wraps to its own centered full-width row below. */
+   the left 40%; input + eye + trash + Check fill the right 60% on the SAME
+   line, top-aligned with the title (Obsidian's card layout forces the
+   control to `width:100%`, which stacks it below the text — so we pin the
+   width to auto and let flex-basis rule); the centered validity bar wraps
+   to its own full-width row below. */
 .setting-item.ss-token-card {
   flex-wrap: wrap;
+  align-items: flex-start;
 }
 
 .setting-item.ss-token-card .setting-item-info {
@@ -45,6 +48,8 @@ span.ss-badge-conflict {
 
 .setting-item.ss-token-card .setting-item-control {
   flex: 1 1 60%;
+  min-width: 0;
+  width: auto !important;
   justify-content: flex-end;
   flex-wrap: nowrap;
 }
