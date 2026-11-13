@@ -28,3 +28,18 @@ span.ss-badge-conflict {
   color: var(--text-muted);
   margin: 4px 0 8px 0;
 }
+
+span.ss-token-status {
+  display: block;
+  font-size: 0.9em;
+  color: var(--text-muted);
+  margin: 4px 0 12px 0;
+}
+
+span.ss-token-status.ss-token-ok {
+  color: var(--color-green);
+}
+
+span.ss-token-status.ss-token-bad {
+  color: var(--color-red);
+}

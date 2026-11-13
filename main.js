@@ -182,6 +182,29 @@ class SnippetSyncPlugin extends Plugin {
     }
   }
 
+  /**
+   * Validate THIS user's stored token against GitHub (same API surface BRAT
+   * uses to validate: rate_limit returns core quota; 401 = bad token).
+   * Returns {ok, status, core} — never echoes the token value.
+   */
+  async verifyToken() {
+    const token = await this.getTokenValue();
+    if (!token) return { ok: false, status: 0, core: null };
+    try {
+      const res = await requestUrl({
+        url: "https://api.github.com/rate_limit",
+        method: "GET",
+        headers: { "User-Agent": "Obsidian/Snippet-Sync", Authorization: `Bearer ${token}` },
+      });
+      if (res.status === 200 && res.json && res.json.resources && res.json.resources.core) {
+        return { ok: true, status: 200, core: res.json.resources.core };
+      }
+      return { ok: false, status: res.status, core: null };
+    } catch (e) {
+      return { ok: false, status: e && e.status ? e.status : "network", core: null };
+    }
+  }
+
   // ---- file plumbing (adapter on config dir, exactly like BRAT does for plugins) ----
 
   snippetsFolder() {
@@ -429,6 +452,9 @@ class SnippetSyncSettingTab extends PluginSettingTab {
   constructor(app, plugin) {
     super(app, plugin);
     this.plugin = plugin;
+    this.tokenRevealed = false;
+    this.tokenVerified = undefined;
+    this.tokenChecked = false;
     this.plugin.settingsTab = this;
   }
 
@@ -478,52 +504,57 @@ class SnippetSyncSettingTab extends PluginSettingTab {
           }),
       )
       .addButton((b) =>
-        b.setButtonText(this.plugin.hasToken() ? "Paste a new token" : "Paste your token").onClick(async () => {
-          // Focus the paste field below; the actual paste/save happens there.
-          if (this.tokenInput) this.tokenInput.inputEl.focus();
+        b.setButtonText("Check token").setTooltip("Validate the stored token against GitHub").onClick(async () => {
+          await this.checkToken();
         }),
       );
 
+    // Token status line (like BRAT's token validity display).
+    this.tokenStatusEl = containerEl.createEl("span", {
+      cls: "ss-token-status",
+      text: this.tokenStatusText(),
+    });
+    if (this.plugin.hasToken() && !this.tokenChecked) {
+      void this.checkToken(); // validate on first render
+    }
+
     new Setting(containerEl)
       .setName("Token value")
-      .setDesc(this.plugin.hasToken() ? "Stored securely. Shows only the tail; use the eye to peek while editing, the trash to remove." : "Not set yet. Paste your GitHub personal access token here; it will be saved to the OS keychain via SecretStorage.")
+      .setDesc(this.plugin.hasToken() ? "Stored securely. Shows only the tail; the eye reveals/hides the full value." : "Not set yet. Paste your GitHub personal access token here; it will be saved to the OS keychain via SecretStorage.")
       .addText((t) => {
         this.tokenInput = t;
-        t.inputEl.type = "password"; // native asterisks while typing
-        t.setPlaceholder("ghp_••••••••••••");
+        this.tokenInput.inputEl.type = "password"; // native asterisks while typing
+        this.tokenInput.setPlaceholder("ghp_••••••••••••");
         if (this.plugin.hasToken()) {
           const tail = this.tokenTail();
-          t.setValue(`ghp_••••••••••••${tail ? tail : ""}`);
+          this.tokenInput.setValue(`ghp_••••••••••••${tail ? tail : ""}`);
         }
-        t.onChange(async (v) => {
+        this.tokenInput.onChange(async (v) => {
           if (!v) return;
           if (v.startsWith("ghp_•••")) return; // cosmetic mask, not a real paste
           await this.plugin.saveToken(v.trim());
+          this.tokenRevealed = false;
+          await this.checkToken();
         });
       })
-      .addExtraButton((b) =>
+      .addExtraButton((b) => {
+        this.tokenEyeButton = b;
         b
           .setIcon(this.plugin.hasToken() ? "lucide-eye" : "lucide-eye-off")
-          .setTooltip(this.plugin.hasToken() ? "Token stored" : "No token stored")
+          .setTooltip(this.plugin.hasToken() ? "Show/hide token" : "No token stored")
           .onClick(async () => {
             if (!this.plugin.hasToken()) return;
-            // Reveal the real token so the user can verify/copy (their own machine).
-            const real = await this.plugin.getTokenValue();
-            if (real && this.tokenInput) {
-              this.tokenInput.setValue(real);
-              this.tokenInput.inputEl.type = "text";
-              window.setTimeout(() => {
-                if (this.tokenInput) this.tokenInput.inputEl.type = "password";
-              }, 15000);
-            }
-          }),
-      )
+            this.tokenRevealed = !this.tokenRevealed;
+            await this.applyTokenVisibility();
+          });
+      })
       .addExtraButton((b) =>
         b
           .setIcon("lucide-trash-2")
           .setTooltip("Remove stored token")
           .onClick(async () => {
             await this.plugin.deleteToken();
+            this.tokenRevealed = false;
             this.refresh();
           }),
       );
@@ -633,6 +664,63 @@ class SnippetSyncSettingTab extends PluginSettingTab {
     } catch (e) {
       return "";
     }
+  }
+
+  /** Apply the current tokenRevealed state to the input (click-toggle, no timers). */
+  async applyTokenVisibility() {
+    if (!this.tokenInput) return;
+    const reveal = this.tokenRevealed;
+    if (reveal) {
+      const real = await this.plugin.getTokenValue();
+      if (real) {
+        this.tokenInput.inputEl.type = "text";
+        this.tokenInput.setValue(real);
+        if (this.tokenEyeButton) this.tokenEyeButton.setIcon("lucide-eye-off").setTooltip("Hide token");
+        return;
+      }
+      // No value to reveal -> revert toggle.
+      this.tokenRevealed = false;
+    }
+    const tail = this.tokenTail();
+    this.tokenInput.inputEl.type = "password";
+    this.tokenInput.setValue(`ghp_••••••••••••${tail ? tail : ""}`);
+    if (this.tokenEyeButton) this.tokenEyeButton.setIcon("lucide-eye").setTooltip("Show token");
+  }
+
+  /** Status text to render when no live check result exists yet. */
+  tokenStatusText() {
+    if (!this.plugin.hasToken()) return "No token stored.";
+    if (this.tokenVerified === undefined) return "Token stored — checking validity\u2026";
+    if (this.tokenVerified.ok) {
+      const core = this.tokenVerified.core || {};
+      const remaining = typeof core.remaining === "number" ? core.remaining : "?";
+      const limit = typeof core.limit === "number" ? core.limit : "?";
+      const reset = core.reset ? new Date(core.reset * 1000).toLocaleTimeString() : "";
+      return `Valid token — ${remaining}/${limit} requests remaining${reset ? `, resets ${reset}` : ""}.`;
+    }
+    if (this.tokenVerified.status === 401) return "Token rejected by GitHub (401) — paste a new one.";
+    return `Token check failed (${this.tokenVerified.status || "error"}) — see details.`;
+  }
+
+  /** Validate this user's stored token against GitHub's rate_limit endpoint (like BRAT validates). */
+  async checkToken() {
+    if (!this.plugin.hasToken()) {
+      this.tokenVerified = null;
+      if (this.tokenStatusEl) this.tokenStatusEl.setText("No token stored.");
+      return;
+    }
+    if (this.tokenStatusEl) this.tokenStatusEl.setText("Checking token\u2026");
+    const result = await this.plugin.verifyToken();
+    this.tokenVerified = result;
+    this.tokenChecked = true;
+    if (this.tokenStatusEl) {
+      this.tokenStatusEl.setText(this.tokenStatusText());
+      this.tokenStatusEl.removeClass("ss-token-ok", "ss-token-bad");
+      if (result && result.ok) this.tokenStatusEl.addClass("ss-token-ok");
+      else if (result && (result.status === 401 || result.status === 403)) this.tokenStatusEl.addClass("ss-token-bad");
+      else if (result && result.status !== 200) this.tokenStatusEl.addClass("ss-token-bad");
+    }
+    return result;
   }
 
   async refreshSnippetList() {
