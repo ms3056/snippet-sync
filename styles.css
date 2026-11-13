@@ -29,10 +29,24 @@ span.ss-badge-conflict {
   margin: 4px 0 8px 0;
 }
 
-/* Token value card: three rows — col 1 (name+desc) / col 2 (input + eye +
-   trash + Check) on line 1; centered validity bar full-width on line 2. */
+/* Token value card: one row split 40/60 — name + description wrap inside
+   the left 40%; input + eye + trash + Check fill the right 60% on the same
+   line (min-width:0 lets the description actually wrap instead of stretching
+   the row); the validity bar wraps to its own centered full-width row below. */
 .setting-item.ss-token-card {
   flex-wrap: wrap;
+}
+
+.setting-item.ss-token-card .setting-item-info {
+  flex: 0 0 40%;
+  min-width: 0;
+  padding-right: 12px;
+}
+
+.setting-item.ss-token-card .setting-item-control {
+  flex: 1 1 60%;
+  justify-content: flex-end;
+  flex-wrap: nowrap;
 }
 
 div.ss-token-status {
