@@ -31,13 +31,17 @@ span.ss-badge-conflict {
 
 /* Token value card: one row split 40/60 — name + description wrap inside
    the left 40%; input + eye + trash + Check fill the right 60% on the SAME
-   line, top-aligned with the title (Obsidian's card layout forces the
-   control to `width:100%`, which stacks it below the text — so we pin the
-   width to auto and let flex-basis rule); the centered validity bar wraps
-   to its own full-width row below. */
+   line, top-aligned with the title. Obsidian's default `.setting-item{gap}`
+   adds a 16px horizontal gap between the columns, and `flex-wrap` (needed so
+   the validity bar can drop to its own row) turns 40% + gap + 60% into a WRAP
+   — that's what kept pulling the control column below the text. Column gap is
+   zeroed (spacing comes from the info's padding-right instead); row gap stays
+   so the bottom bar has breathing room. */
 .setting-item.ss-token-card {
   flex-wrap: wrap;
   align-items: flex-start;
+  column-gap: 0;
+  row-gap: var(--size-4-3);
 }
 
 .setting-item.ss-token-card .setting-item-info {
@@ -47,7 +51,7 @@ span.ss-badge-conflict {
 }
 
 .setting-item.ss-token-card .setting-item-control {
-  flex: 1 1 60%;
+  flex: 0 1 60%;
   min-width: 0;
   width: auto !important;
   justify-content: flex-end;
