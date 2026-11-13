@@ -471,7 +471,7 @@ class SnippetSyncSettingTab extends PluginSettingTab {
       .setName("Repository")
       .setDesc("GitHub owner/repo (or full URL) holding the snippets manifest.")
       .addText((t) =>
-        t.setPlaceholder("ms3056/obsidian-snippets").setValue(this.plugin.settings.repo).onChange(async (v) => {
+        t.setPlaceholder("username/repository").setValue(this.plugin.settings.repo).onChange(async (v) => {
           this.plugin.settings.repo = scrubRepo(v);
           await this.plugin.saveSettings();
         }),
