@@ -543,23 +543,25 @@ class SnippetSyncSettingTab extends PluginSettingTab {
             this.tokenRevealed = false;
             this.refresh();
           }),
+      )
+      .addButton((b) =>
+        b
+          .setButtonText("Check")
+          .setTooltip("Validate the stored token against GitHub")
+          .setClass("ss-token-check-btn")
+          .onClick(async () => {
+            await this.checkToken();
+          }),
       );
 
-    // Token validity lives INSIDE this card, under the input row — a
-    // full-width bar (not a floating span above the card). Auto-checks on
-    // first render so the green/red state shows immediately, like BRAT.
+    // Token validity: one centered, full-width row at the BOTTOM of this card
+    // (name + description live in column 1; input + eye + trash + Check in
+    // column 2; this bar is the third row, centered across the card).
     const tokenCardEl = tokenSetting.settingEl;
     tokenCardEl.classList.add("ss-token-card");
     const tokenStatusBar = tokenCardEl.createDiv({ cls: "ss-token-status" });
     this.tokenStatusEl = tokenStatusBar.createEl("span", {
       text: this.tokenStatusText(),
-    });
-    tokenStatusBar.createEl("button", {
-      cls: "ss-token-check-btn",
-      text: "Check",
-      attr: { type: "button" },
-    }).addEventListener("click", async () => {
-      await this.checkToken();
     });
     if (this.plugin.hasToken() && !this.tokenChecked) {
       void this.checkToken(); // validate on first render

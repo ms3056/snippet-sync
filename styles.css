@@ -29,8 +29,8 @@ span.ss-badge-conflict {
   margin: 4px 0 8px 0;
 }
 
-/* Token value card: let the status bar wrap to its own full-width row
-   under the input + eye/trash controls instead of floating above the card. */
+/* Token value card: three rows — col 1 (name+desc) / col 2 (input + eye +
+   trash + Check) on line 1; centered validity bar full-width on line 2. */
 .setting-item.ss-token-card {
   flex-wrap: wrap;
 }
@@ -39,7 +39,7 @@ div.ss-token-status {
   flex-basis: 100%;
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: center;
   gap: 8px;
   margin: 8px 0 2px 0;
   padding: 4px 10px;
@@ -47,6 +47,7 @@ div.ss-token-status {
   font-size: 0.9em;
   color: var(--text-muted);
   background: var(--background-secondary);
+  text-align: center;
 }
 
 div.ss-token-status .ss-token-ok {
