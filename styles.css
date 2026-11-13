@@ -29,17 +29,45 @@ span.ss-badge-conflict {
   margin: 4px 0 8px 0;
 }
 
-span.ss-token-status {
-  display: block;
-  font-size: 0.9em;
-  color: var(--text-muted);
-  margin: 4px 0 12px 0;
+/* Token value card: let the status bar wrap to its own full-width row
+   under the input + eye/trash controls instead of floating above the card. */
+.setting-item.ss-token-card {
+  flex-wrap: wrap;
 }
 
-span.ss-token-status.ss-token-ok {
+div.ss-token-status {
+  flex-basis: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 8px 0 2px 0;
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 0.9em;
+  color: var(--text-muted);
+  background: var(--background-secondary);
+}
+
+div.ss-token-status .ss-token-ok {
   color: var(--color-green);
 }
 
-span.ss-token-status.ss-token-bad {
+div.ss-token-status .ss-token-bad {
   color: var(--color-red);
+}
+
+button.ss-token-check-btn {
+  font-size: 0.85em;
+  padding: 1px 10px;
+  border-radius: 4px;
+  border: 1px solid var(--background-modifier-border);
+  background: var(--background-modifier-hover);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+button.ss-token-check-btn:hover {
+  color: var(--text-normal);
+  background: var(--background-modifier-border);
 }

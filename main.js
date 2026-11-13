@@ -502,23 +502,9 @@ class SnippetSyncSettingTab extends PluginSettingTab {
               /* window.open may be blocked in some embedded contexts */
             }
           }),
-      )
-      .addButton((b) =>
-        b.setButtonText("Check token").setTooltip("Validate the stored token against GitHub").onClick(async () => {
-          await this.checkToken();
-        }),
       );
 
-    // Token status line (like BRAT's token validity display).
-    this.tokenStatusEl = containerEl.createEl("span", {
-      cls: "ss-token-status",
-      text: this.tokenStatusText(),
-    });
-    if (this.plugin.hasToken() && !this.tokenChecked) {
-      void this.checkToken(); // validate on first render
-    }
-
-    new Setting(containerEl)
+    const tokenSetting = new Setting(containerEl)
       .setName("Token value")
       .setDesc(this.plugin.hasToken() ? "Stored securely. Shows only the tail; the eye reveals/hides the full value." : "Not set yet. Paste your GitHub personal access token here; it will be saved to the OS keychain via SecretStorage.")
       .addText((t) => {
@@ -559,7 +545,25 @@ class SnippetSyncSettingTab extends PluginSettingTab {
           }),
       );
 
-    // ---- Update behavior (BRAT-flavored) ----
+    // Token validity lives INSIDE this card, under the input row — a
+    // full-width bar (not a floating span above the card). Auto-checks on
+    // first render so the green/red state shows immediately, like BRAT.
+    const tokenCardEl = tokenSetting.settingEl;
+    tokenCardEl.classList.add("ss-token-card");
+    const tokenStatusBar = tokenCardEl.createDiv({ cls: "ss-token-status" });
+    this.tokenStatusEl = tokenStatusBar.createEl("span", {
+      text: this.tokenStatusText(),
+    });
+    tokenStatusBar.createEl("button", {
+      cls: "ss-token-check-btn",
+      text: "Check",
+      attr: { type: "button" },
+    }).addEventListener("click", async () => {
+      await this.checkToken();
+    });
+    if (this.plugin.hasToken() && !this.tokenChecked) {
+      void this.checkToken(); // validate on first render
+    }
     new Setting(containerEl)
       .setName("Check for updates at startup")
       .setDesc("Check once, 60s after Obsidian starts (like BRAT).")
@@ -704,12 +708,15 @@ class SnippetSyncSettingTab extends PluginSettingTab {
 
   /** Validate this user's stored token against GitHub's rate_limit endpoint (like BRAT validates). */
   async checkToken() {
+    const setStatus = (text) => {
+      if (this.tokenStatusEl) this.tokenStatusEl.setText(text);
+    };
     if (!this.plugin.hasToken()) {
       this.tokenVerified = null;
-      if (this.tokenStatusEl) this.tokenStatusEl.setText("No token stored.");
+      setStatus("No token stored.");
       return;
     }
-    if (this.tokenStatusEl) this.tokenStatusEl.setText("Checking token\u2026");
+    setStatus("Checking token\u2026");
     const result = await this.plugin.verifyToken();
     this.tokenVerified = result;
     this.tokenChecked = true;
